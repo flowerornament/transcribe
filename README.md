@@ -4,10 +4,14 @@ YouTube transcription CLI using [Parakeet V3](https://huggingface.co/nvidia/para
 
 ## Features
 
-- Fast local transcription (~1 min for 1 hour of audio on M4)
-- Auto-paragraphing based on speech pauses
-- Optional timestamps
-- Markdown output with video metadata
+- **Fast local transcription** - ~1 min for 1 hour of audio on M4
+- **Multilingual** - Parakeet V3 supports 25 languages with auto-detection
+- **Auto-paragraphing** - Groups text by natural speech pauses (>1.5s gaps)
+- **Optional timestamps** - `[MM:SS]` markers with `-t` flag
+- **Smart filenames** - Uses video title, or kebab-case with `-k`
+- **Overwrite protection** - Prompts when file exists (overwrite/rename/cancel)
+- **Progress indicator** - Animated marquee during transcription
+- **Markdown output** - Includes video title, source URL, duration, date
 
 ## Installation
 
