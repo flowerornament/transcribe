@@ -34,12 +34,17 @@ cd transcribe
 ## Usage
 
 ```bash
-transcribe "https://youtube.com/watch?v=..."           # basic
-transcribe "https://youtube.com/watch?v=..." -t        # with timestamps
-transcribe "https://youtube.com/watch?v=..." -k        # kebab-case filename
-transcribe "https://youtube.com/watch?v=..." -o out.md # custom output
-transcribe "https://youtube.com/watch?v=..." -f        # force overwrite
+transcribe "https://youtube.com/watch?v=..."
 ```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-t, --timestamps` | Add `[MM:SS]` timestamp at start of each segment |
+| `-k, --kebab` | Use kebab-case filename (`video-title-transcript.md`) |
+| `-o, --output FILE` | Custom output path |
+| `-f, --force` | Overwrite existing file without prompting |
 
 ## Output
 
