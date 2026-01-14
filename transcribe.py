@@ -93,12 +93,14 @@ def download_audio(url: str, output_path: Path) -> None:
         "--audio-quality", "0",  # Best quality
         "-o", str(output_path),
         "--progress",
+        "--no-warnings",
         url
     ]
 
     result = subprocess.run(cmd)
     if result.returncode != 0:
         print("Error downloading audio", file=sys.stderr)
+        print("Tip: Try running with browser cookies: yt-dlp --cookies-from-browser chrome ...", file=sys.stderr)
         sys.exit(1)
 
 
@@ -141,6 +143,10 @@ def parse_srt(content: str) -> list:
 
 def transcribe_audio(audio_path: Path) -> dict:
     """Transcribe audio using parakeet-mlx."""
+    import threading
+    from rich.live import Live
+    from rich.text import Text
+
     cmd = [
         "parakeet-mlx",
         str(audio_path),
@@ -148,8 +154,25 @@ def transcribe_audio(audio_path: Path) -> dict:
         "--output-dir", str(audio_path.parent),
     ]
 
-    with console.status("[bold blue]Transcribing...", spinner="dots"):
+    result = None
+    def run_transcription():
+        nonlocal result
         result = subprocess.run(cmd, capture_output=True, text=True)
+
+    thread = threading.Thread(target=run_transcription)
+    thread.start()
+
+    # Marquee animation (stock ticker style)
+    marquee_text = "TRANSCRIBING • "
+    width = 24
+    pos = 0
+
+    with Live(Text(""), refresh_per_second=10, transient=True) as live:
+        while thread.is_alive():
+            display = (marquee_text * 3)[pos:pos + width]
+            live.update(Text(display, style="bold blue"))
+            pos = (pos + 1) % len(marquee_text)
+            thread.join(timeout=0.1)
 
     if result.returncode != 0:
         console.print(f"[red]Transcription error:[/red] {result.stderr}", file=sys.stderr)
