@@ -9,8 +9,6 @@ YouTube transcription CLI using [Parakeet V3](https://huggingface.co/nvidia/para
 - **Auto-paragraphing** - Groups text by natural speech pauses (>1.5s gaps)
 - **Optional timestamps** - `[MM:SS]` markers with `-t` flag
 - **Smart filenames** - Uses video title, or kebab-case with `-k`
-- **Overwrite protection** - Prompts when file exists (overwrite/rename/cancel)
-- **Progress indicator** - Animated marquee during transcription
 - **Markdown output** - Includes video title, source URL, duration, date
 
 ## Installation
