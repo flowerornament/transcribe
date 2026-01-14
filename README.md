@@ -70,3 +70,7 @@ With `-t` timestamps:
 - macOS with Apple Silicon (M1/M2/M3/M4)
 - Python 3
 - ~2.3GB disk space for Parakeet model (downloads on first run)
+
+---
+
+Built with [Claude Code](https://claude.ai/code)
