@@ -1,0 +1,9 @@
+# YouTube Transcription Tool Dependencies
+# Note: parakeet-mlx should be installed via pipx for CLI usage
+# These are just for reference/documentation
+
+# Core tools (should be installed separately):
+# - yt-dlp (via Nix or brew)
+# - parakeet-mlx (via pipx)
+
+# Python stdlib only - no pip dependencies needed for the script itself
