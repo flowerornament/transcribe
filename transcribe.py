@@ -70,6 +70,7 @@ def get_video_info(url: str) -> dict:
     print("Fetching video info...")
     cmd = [
         "yt-dlp",
+        "--cookies-from-browser", "chrome",
         "--dump-json",
         "--no-download",
         url
@@ -88,6 +89,7 @@ def download_audio(url: str, output_path: Path) -> None:
     print("Downloading audio...")
     cmd = [
         "yt-dlp",
+        "--cookies-from-browser", "chrome",
         "-x",  # Extract audio
         "--audio-format", "wav",
         "--audio-quality", "0",  # Best quality
@@ -171,7 +173,7 @@ def transcribe_audio(audio_path: Path) -> dict:
         while thread.is_alive():
             display = (marquee_text * 3)[pos:pos + width]
             live.update(Text(display, style="bold blue"))
-            pos = (pos + 1) % len(marquee_text)
+            pos = (pos - 1) % len(marquee_text)
             thread.join(timeout=0.1)
 
     if result.returncode != 0:
