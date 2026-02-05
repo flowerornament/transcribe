@@ -71,6 +71,7 @@ def get_video_info(url: str) -> dict:
     cmd = [
         "yt-dlp",
         "--cookies-from-browser", "chrome",
+        "--no-check-formats",  # Skip slow format availability checks
         "--dump-json",
         "--no-download",
         url
@@ -90,6 +91,7 @@ def download_audio(url: str, output_path: Path) -> None:
     cmd = [
         "yt-dlp",
         "--cookies-from-browser", "chrome",
+        "--no-check-formats",  # Skip slow format availability checks
         "-x",  # Extract audio
         "--audio-format", "wav",
         "--audio-quality", "0",  # Best quality
