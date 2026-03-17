@@ -14,7 +14,7 @@ transcribe URL -f               # force overwrite
 
 **Key files:**
 - `transcribe.py` - Main script (~350 lines)
-- `ship.sh` - Symlinks to `~/.nix-config/scripts/transcribe` for PATH access
+- `flake.nix` - Nix packaging (writeShellApplication wrapping python3 + rich + yt-dlp)
 
 **Dependencies:**
 - `yt-dlp` - YouTube download (installed via Nix)
@@ -35,12 +35,19 @@ bd create "Title"     # Create new issue
 bd sync               # Sync with remote (auto-enabled)
 ```
 
+## Nix Packaging
+
+Packaged via `flake.nix` (`writeShellApplication`). Wraps `transcribe.py` with python3+rich and yt-dlp on PATH. Installed system-wide from `~/.nix-config/flake.nix`.
+
+- Dev loop: `python3 transcribe.py URL` — no nix rebuild needed
+- Verify packaging: `nix build .` then `./result/bin/transcribe --help`
+- Deploy: push to GitHub, then in nix-config: `nix flake update transcribe && nx rebuild`
+
 ## Development Notes
 
 **Testing changes:**
 ```bash
-# Script is symlinked, changes are immediate
-transcribe "https://youtube.com/watch?v=..." -t
+python3 transcribe.py "https://youtube.com/watch?v=..." -t
 ```
 
 **Architecture:**
