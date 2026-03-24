@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """
-YouTube video transcription tool using Parakeet V3 (MLX) on Apple Silicon.
+Audio transcription tool using Parakeet V3 (MLX) on Apple Silicon.
 
 Usage:
-    transcribe URL                     # basic transcription
-    transcribe URL -t                  # with timestamps
-    transcribe URL -k                  # kebab-case filename
-    transcribe URL -o out.md           # custom output path
-    transcribe URL -f                  # force overwrite
+    transcribe URL                     # YouTube video
+    transcribe file.opus               # single audio file
+    transcribe a.opus b.mp3            # multiple files
+    transcribe ./folder/               # all audio in folder
+    transcribe ./folder/ -r            # recursive folder scan
+    transcribe file.opus -t            # with timestamps
+    transcribe file.opus -k            # kebab-case filename
+    transcribe file.opus -o out.md     # custom output path
+    transcribe file.opus -f            # force overwrite
 """
 
 import argparse
@@ -22,9 +26,12 @@ from pathlib import Path
 from rich.console import Console
 
 console = Console()
+err_console = Console(stderr=True)
 
 # Paragraph break threshold (seconds of silence between segments)
 PARAGRAPH_GAP_SECONDS = 1.5
+
+AUDIO_EXTENSIONS = {'.opus', '.mp3', '.wav', '.m4a', '.ogg', '.flac', '.aac', '.wma', '.webm'}
 
 
 def _format_time(seconds: float, brackets: bool = False) -> str:
@@ -36,17 +43,14 @@ def _format_time(seconds: float, brackets: bool = False) -> str:
 
 
 def format_timestamp(seconds: float) -> str:
-    """Convert seconds to [MM:SS] or [HH:MM:SS] format."""
     return _format_time(seconds, brackets=True)
 
 
 def format_duration(seconds: float) -> str:
-    """Convert seconds to human-readable duration."""
     return _format_time(seconds, brackets=False)
 
 
 def is_youtube_url(url: str) -> bool:
-    """Check if URL looks like a YouTube video URL."""
     patterns = [
         r'youtube\.com/watch\?v=',
         r'youtu\.be/',
@@ -56,9 +60,25 @@ def is_youtube_url(url: str) -> bool:
     return any(re.search(p, url) for p in patterns)
 
 
+def is_audio_file(path: Path) -> bool:
+    return path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS
+
+
+def collect_audio_files(path: Path, recursive: bool = False) -> list[Path]:
+    if path.is_file():
+        if is_audio_file(path):
+            return [path]
+        console.print(f"[yellow]Skipping non-audio file:[/yellow] {path}")
+        return []
+    elif path.is_dir():
+        if recursive:
+            return sorted(f for f in path.rglob('*') if is_audio_file(f))
+        return sorted(f for f in path.iterdir() if is_audio_file(f))
+    console.print(f"[red]Not found:[/red] {path}")
+    return []
+
+
 def sanitize_filename(title: str, kebab: bool = False) -> str:
-    """Convert video title to safe filename."""
-    # Remove dangerous filesystem characters
     safe = re.sub(r'[<>:"/\\|?*]', '', title).strip()
     if kebab:
         safe = re.sub(r'\s+', '-', safe.lower())
@@ -66,41 +86,70 @@ def sanitize_filename(title: str, kebab: bool = False) -> str:
 
 
 def get_video_info(url: str) -> dict:
-    """Get video metadata using yt-dlp."""
     print("Fetching video info...")
     cmd = [
         "yt-dlp",
         "--cookies-from-browser", "chrome",
-        "--no-check-formats",  # Skip slow format availability checks
+        "--no-check-formats",
         "--dump-json",
         "--no-download",
         url
     ]
-
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"Error getting video info: {result.stderr}", file=sys.stderr)
         sys.exit(1)
-
     return json.loads(result.stdout)
 
 
+def get_audio_duration(path: Path) -> float:
+    cmd = [
+        "ffprobe", "-v", "quiet",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        str(path)
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0 and result.stdout.strip():
+        try:
+            return float(result.stdout.strip())
+        except ValueError:
+            pass
+    return 0
+
+
+def convert_to_wav(input_path: Path, output_dir: Path) -> Path:
+    if input_path.suffix.lower() == '.wav':
+        return input_path
+    wav_path = output_dir / f"{input_path.stem}.wav"
+    console.print(f"  Converting {input_path.suffix} to wav...")
+    cmd = [
+        "ffmpeg", "-i", str(input_path),
+        "-ar", "16000",  # 16kHz (optimal for speech recognition)
+        "-ac", "1",      # mono
+        "-y",
+        str(wav_path)
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg failed: {result.stderr.strip()}")
+    return wav_path
+
+
 def download_audio(url: str, output_path: Path) -> None:
-    """Download audio from YouTube video."""
     print("Downloading audio...")
     cmd = [
         "yt-dlp",
         "--cookies-from-browser", "chrome",
-        "--no-check-formats",  # Skip slow format availability checks
-        "-x",  # Extract audio
+        "--no-check-formats",
+        "-x",
         "--audio-format", "wav",
-        "--audio-quality", "0",  # Best quality
+        "--audio-quality", "0",
         "-o", str(output_path),
         "--progress",
         "--no-warnings",
         url
     ]
-
     result = subprocess.run(cmd)
     if result.returncode != 0:
         print("Error downloading audio", file=sys.stderr)
@@ -109,24 +158,17 @@ def download_audio(url: str, output_path: Path) -> None:
 
 
 def parse_srt_timestamp(timestamp: str) -> float:
-    """Parse SRT timestamp (HH:MM:SS,mmm) to seconds."""
-    # Format: 00:00:01,234 -> 1.234
     time_part, ms_part = timestamp.split(',')
     h, m, s = time_part.split(':')
     return int(h) * 3600 + int(m) * 60 + int(s) + int(ms_part) / 1000
 
 
 def parse_srt(content: str) -> list:
-    """Parse SRT content into list of segments with timestamps."""
     segments = []
     blocks = content.strip().split('\n\n')
-
     for block in blocks:
         lines = block.strip().split('\n')
         if len(lines) >= 3:
-            # Line 0: sequence number
-            # Line 1: timestamps (start --> end)
-            # Line 2+: text
             try:
                 timestamp_line = lines[1]
                 start_ts, end_ts = timestamp_line.split(' --> ')
@@ -134,19 +176,13 @@ def parse_srt(content: str) -> list:
                 end = parse_srt_timestamp(end_ts.strip())
                 text = ' '.join(lines[2:]).strip()
                 if text:
-                    segments.append({
-                        'start': start,
-                        'end': end,
-                        'text': text
-                    })
+                    segments.append({'start': start, 'end': end, 'text': text})
             except (ValueError, IndexError):
                 continue
-
     return segments
 
 
 def transcribe_audio(audio_path: Path) -> dict:
-    """Transcribe audio using parakeet-mlx."""
     import threading
     from rich.live import Live
     from rich.text import Text
@@ -166,8 +202,7 @@ def transcribe_audio(audio_path: Path) -> dict:
     thread = threading.Thread(target=run_transcription)
     thread.start()
 
-    # Marquee animation (stock ticker style)
-    marquee_text = "TRANSCRIBING • "
+    marquee_text = "TRANSCRIBING \u2022 "
     width = 24
     pos = 0
 
@@ -179,39 +214,33 @@ def transcribe_audio(audio_path: Path) -> dict:
             thread.join(timeout=0.1)
 
     if result.returncode != 0:
-        console.print(f"[red]Transcription error:[/red] {result.stderr}", file=sys.stderr)
-        sys.exit(1)
+        raise RuntimeError(f"parakeet-mlx failed: {result.stderr.strip()}")
 
-    # Find the SRT output file
     srt_files = list(audio_path.parent.glob("*.srt"))
     if not srt_files:
-        print(f"Looking for output in {audio_path.parent}:")
-        for f in audio_path.parent.iterdir():
-            print(f"  {f.name}")
-        print("Error: Could not find transcription output file", file=sys.stderr)
-        sys.exit(1)
+        listing = ", ".join(f.name for f in audio_path.parent.iterdir())
+        raise RuntimeError(f"No SRT output found (dir contains: {listing})")
 
     content = srt_files[0].read_text()
     segments = parse_srt(content)
 
-    # Always return segments (needed for paragraph grouping)
+    # Clean up so subsequent transcriptions in same dir don't collide
+    srt_files[0].unlink()
+
     return {"segments": segments}
 
 
 def generate_markdown(
-    video_info: dict,
+    title: str,
+    source: str,
+    duration: float,
     transcription: dict,
-    url: str,
-    include_timestamps: bool
+    include_timestamps: bool,
 ) -> str:
-    """Generate markdown output from transcription."""
-    title = video_info.get("title", "Untitled Video")
-    duration = video_info.get("duration", 0)
-
     lines = [
         f"# Transcript: {title}",
         "",
-        f"**Source:** {url}",
+        f"**Source:** {source}",
         f"**Duration:** {format_duration(duration)}",
         f"**Transcribed:** {datetime.now().strftime('%Y-%m-%d')}",
         "",
@@ -224,16 +253,13 @@ def generate_markdown(
     segments = transcription.get("segments", [])
 
     if include_timestamps:
-        # Format with timestamps per segment
         for segment in segments:
             start = segment.get("start", 0)
             text = segment.get("text", "").strip()
             if text:
-                timestamp = format_timestamp(start)
-                lines.append(f"{timestamp} {text}")
+                lines.append(f"{format_timestamp(start)} {text}")
                 lines.append("")
     else:
-        # Group into paragraphs based on timing gaps (>1.5s = new paragraph)
         paragraphs = []
         current_para = []
         last_end = 0
@@ -245,7 +271,6 @@ def generate_markdown(
             if not text:
                 continue
 
-            # New paragraph if gap exceeds threshold
             if current_para and (start - last_end) > PARAGRAPH_GAP_SECONDS:
                 paragraphs.append(' '.join(current_para))
                 current_para = []
@@ -263,17 +288,120 @@ def generate_markdown(
     return "\n".join(lines)
 
 
+def _handle_existing_file(output_path: Path) -> Path | None:
+    print(f"\nFile already exists: {output_path}")
+    print("  [o] Overwrite")
+    print("  [r] Rename (add number)")
+    print("  [c] Cancel")
+    choice = input("\nChoice [o/r/c]: ").strip().lower()
+
+    if choice == 'c':
+        print("Cancelled.")
+        return None
+    elif choice == 'r':
+        base = output_path.stem
+        ext = output_path.suffix
+        n = 2
+        while True:
+            new_path = output_path.parent / f"{base} {n}{ext}"
+            if not new_path.exists():
+                print(f"Will save as: {new_path}")
+                return new_path
+            n += 1
+    return output_path
+
+
+def transcribe_file(file_path: Path, output_path: Path, include_timestamps: bool) -> bool:
+    console.print(f"\n[bold]Transcribing:[/bold] {file_path.name}")
+    try:
+        duration = get_audio_duration(file_path)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wav_path = convert_to_wav(file_path, Path(tmpdir))
+            transcription = transcribe_audio(wav_path)
+
+        markdown = generate_markdown(
+            title=file_path.stem,
+            source=str(file_path),
+            duration=duration,
+            transcription=transcription,
+            include_timestamps=include_timestamps,
+        )
+
+        output_path.write_text(markdown)
+        console.print(f"[green]\u2713[/green] Saved to: {output_path}")
+        return True
+    except RuntimeError as e:
+        err_console.print(f"[red]Failed:[/red] {file_path.name}: {e}")
+        return False
+
+
+def transcribe_youtube(url: str, args) -> bool:
+    video_info = get_video_info(url)
+    title = video_info.get("title", "video")
+    duration = video_info.get("duration", 0)
+
+    if args.output:
+        output_path = Path(args.output)
+    else:
+        safe_title = sanitize_filename(title, kebab=args.kebab)
+        suffix = "-transcript.md" if args.kebab else " Transcript.md"
+        output_path = Path(f"{safe_title}{suffix}")
+
+    if output_path.exists() and not args.force:
+        output_path = _handle_existing_file(output_path)
+        if output_path is None:
+            return False
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            audio_path = Path(tmpdir) / "audio.wav"
+            download_audio(url, audio_path)
+            wav_files = list(Path(tmpdir).glob("*.wav"))
+            if wav_files:
+                audio_path = wav_files[0]
+            transcription = transcribe_audio(audio_path)
+    except RuntimeError as e:
+        err_console.print(f"[red]Transcription failed:[/red] {e}")
+        return False
+
+    markdown = generate_markdown(
+        title=title,
+        source=url,
+        duration=duration,
+        transcription=transcription,
+        include_timestamps=args.timestamps,
+    )
+
+    output_path.write_text(markdown)
+    console.print(f"\n[green]\u2713[/green] Saved to: {output_path}")
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Transcribe YouTube videos using Parakeet V3 on Apple Silicon"
+        description="Transcribe audio using Parakeet V3 on Apple Silicon",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""examples:
+  transcribe recording.opus              Transcribe a single file
+  transcribe a.opus b.mp3 c.m4a         Transcribe multiple files
+  transcribe ./voice-notes/             All audio in a folder (flat)
+  transcribe ./voice-notes/ -r          Recursive folder scan
+  transcribe recording.opus -t          Include [MM:SS] timestamps
+  transcribe recording.opus -o out.md   Custom output path
+  transcribe ./folder/ -o ./out/ -f     Batch to output dir, no prompts
+  transcribe https://youtu.be/...       YouTube video (requires yt-dlp)
+
+supported formats: .opus .mp3 .wav .m4a .ogg .flac .aac .wma .webm"""
     )
     parser.add_argument(
-        "url",
-        help="YouTube video URL"
+        "inputs",
+        nargs='+',
+        help="YouTube URL(s), audio file(s), or directory"
     )
     parser.add_argument(
         "-o", "--output",
-        help="Output markdown file path (default: <video-title>.md)"
+        help="Output file (single input) or directory (multiple inputs)"
     )
     parser.add_argument(
         "-t", "--timestamps",
@@ -288,78 +416,73 @@ def main():
     parser.add_argument(
         "-f", "--force",
         action="store_true",
-        help="Overwrite existing file without prompting"
+        help="Overwrite existing files without prompting"
+    )
+    parser.add_argument(
+        "-r", "--recursive",
+        action="store_true",
+        help="Recursively scan directories for audio files"
     )
 
     args = parser.parse_args()
 
-    # Validate URL
-    if not is_youtube_url(args.url):
-        print(f"Error: doesn't look like a YouTube URL: {args.url}", file=sys.stderr)
+    # Partition inputs into URLs and file paths
+    audio_files = []
+    youtube_urls = []
+
+    for inp in args.inputs:
+        if is_youtube_url(inp):
+            youtube_urls.append(inp)
+        else:
+            path = Path(inp).resolve()
+            audio_files.extend(collect_audio_files(path, recursive=args.recursive))
+
+    total = len(audio_files) + len(youtube_urls)
+    if total == 0:
+        console.print("[red]No audio files or YouTube URLs found.[/red]")
         sys.exit(1)
 
-    # Get video info
-    video_info = get_video_info(args.url)
-    title = video_info.get("title", "video")
-
-    # Determine output path
-    if args.output:
-        output_path = Path(args.output)
-    else:
-        safe_title = sanitize_filename(title, kebab=args.kebab)
-        suffix = "-transcript.md" if args.kebab else " Transcript.md"
-        output_path = Path(f"{safe_title}{suffix}")
-
-    # Check if file exists
-    if output_path.exists() and not args.force:
-        print(f"\nFile already exists: {output_path}")
-        print("  [o] Overwrite")
-        print("  [r] Rename (add number)")
-        print("  [c] Cancel")
-        choice = input("\nChoice [o/r/c]: ").strip().lower()
-
-        if choice == 'c':
+    # Confirm when processing multiple files from directory scan
+    if len(audio_files) > 1 and not args.force:
+        console.print(f"\n[bold]Found {len(audio_files)} audio files:[/bold]")
+        for f in audio_files:
+            console.print(f"  {f}")
+        confirm = input(f"\nTranscribe all {len(audio_files)} files? [y/N]: ").strip().lower()
+        if confirm not in ('y', 'yes'):
             print("Cancelled.")
             sys.exit(0)
-        elif choice == 'r':
-            # Find next available number
-            base = output_path.stem
-            ext = output_path.suffix
-            n = 2
-            while True:
-                new_path = output_path.parent / f"{base} {n}{ext}"
-                if not new_path.exists():
-                    output_path = new_path
-                    break
-                n += 1
-            print(f"Will save as: {output_path}")
 
-    # Create temp directory for audio
-    with tempfile.TemporaryDirectory() as tmpdir:
-        audio_path = Path(tmpdir) / "audio.wav"
+    # Determine output directory for file transcriptions
+    output_dir = Path.cwd()
+    if args.output and (len(audio_files) > 1 or Path(args.output).is_dir()):
+        output_dir = Path(args.output)
+        output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Download audio
-        download_audio(args.url, audio_path)
+    # Process YouTube URLs
+    for url in youtube_urls:
+        transcribe_youtube(url, args)
 
-        # Find the actual downloaded file (yt-dlp may modify the name)
-        wav_files = list(Path(tmpdir).glob("*.wav"))
-        if wav_files:
-            audio_path = wav_files[0]
+    # Process audio files
+    succeeded = 0
+    for file_path in audio_files:
+        safe_name = sanitize_filename(file_path.stem, kebab=args.kebab)
+        suffix = "-transcript.md" if args.kebab else ".md"
 
-        # Transcribe
-        transcription = transcribe_audio(audio_path)
+        if args.output and len(audio_files) == 1 and not Path(args.output).is_dir():
+            out_path = Path(args.output)
+        else:
+            out_path = output_dir / f"{safe_name}{suffix}"
 
-    # Generate markdown
-    markdown = generate_markdown(
-        video_info,
-        transcription,
-        args.url,
-        args.timestamps
-    )
+        if out_path.exists() and not args.force:
+            out_path = _handle_existing_file(out_path)
+            if out_path is None:
+                continue
 
-    # Write output
-    output_path.write_text(markdown)
-    console.print(f"\n[green]✓[/green] Saved to: {output_path}")
+        if transcribe_file(file_path, out_path, args.timestamps):
+            succeeded += 1
+
+    if len(audio_files) > 1:
+        console.print(f"\n[bold green]Done:[/bold green] {succeeded}/{len(audio_files)} files transcribed")
 
 
 if __name__ == "__main__":
